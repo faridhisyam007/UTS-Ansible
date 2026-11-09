@@ -1,0 +1,155 @@
+---
+- name: Install Nginx dan PHP pada Web Server
+  hosts: web
+  become: yes
+
+  tasks:
+    - name: Update daftar paket
+      apt:
+        update_cache: yes
+
+    - name: Install Nginx dan PHP
+      apt:
+        name:
+          - nginx
+          - php-fpm
+          - php-mysql
+          - curl
+          - unzip
+        state: present
+
+    - name: Pastikan Nginx berjalan
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Unduh file ZIP WordPress terbaru
+      get_url:
+        url: https://wordpress.org/latest.zip
+        dest: /tmp/wordpress.zip
+
+    - name: Ekstrak WordPress ke direktori web Nginx
+      unarchive:
+        src: /tmp/wordpress.zip
+        dest: /var/www/html/
+        remote_src: yes
+        creates: /var/www/html/wordpress
+
+    - name: Ubah kepemilikan file WordPress menjadi www-data
+      file:
+        path: /var/www/html/wordpress
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    - name: Salin file wp-config-sample.php menjadi wp-config.php
+      copy:
+        src: /var/www/html/wordpress/wp-config-sample.php
+        dest: /var/www/html/wordpress/wp-config.php
+        remote_src: yes
+
+    - name: Set database name pada wp-config.php
+      lineinfile:
+        path: /var/www/html/wordpress/wp-config.php
+        regexp: "^define\\( 'DB_NAME', "
+        line: "define( 'DB_NAME', 'wordpress' );"
+
+    - name: Set database user pada wp-config.php
+      lineinfile:
+        path: /var/www/html/wordpress/wp-config.php
+        regexp: "^define\\( 'DB_USER', "
+        line: "define( 'DB_USER', 'wpuser' );"
+
+    - name: Set database password pada wp-config.php
+      lineinfile:
+        path: /var/www/html/wordpress/wp-config.php
+        regexp: "^define\\( 'DB_PASSWORD', "
+        line: "define( 'DB_PASSWORD', '12345678' );"
+
+    - name: Set database host pada wp-config.php
+      lineinfile:
+        path: /var/www/html/wordpress/wp-config.php
+        regexp: "^define\\( 'DB_HOST', "
+        line: "define( 'DB_HOST', '192.168.56.11' );"
+
+    - name: Buat file konfigurasi Nginx untuk WordPress
+      copy:
+        dest: /etc/nginx/sites-available/wordpress
+        content: |
+          server {
+              listen 80;
+              server_name 192.168.56.10;
+
+              root /var/www/html/wordpress;
+              index index.php index.html index.htm;
+
+              location / {
+                  try_files $uri $uri/ /index.php?$args;
+              }
+
+              location ~ \.php$ {
+                  include snippets/fastcgi-php.conf;
+                  fastcgi_pass unix:/run/php/php-fpm.sock;
+              }
+
+              location ~ /\.ht {
+                  deny all;
+              }
+          }
+
+    - name: Aktifkan situs WordPress di Nginx
+      file:
+        src: /etc/nginx/sites-available/wordpress
+        dest: /etc/nginx/sites-enabled/wordpress
+        state: link
+
+    - name: Hapus default site Nginx agar tidak bentrok
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Test konfigurasi Nginx
+      command: nginx -t
+
+    - name: Restart layanan Nginx
+      service:
+        name: nginx
+        state: restarted
+
+- name: Install MariaDB pada Database Server
+  hosts: database
+  become: yes
+
+  tasks:
+    - name: Update daftar paket Database Server
+      apt:
+        update_cache: yes
+
+    - name: Install MariaDB Server
+      apt:
+        name:
+          - mariadb-server
+          - python3-pymysql
+        state: present
+
+    - name: Pastikan MariaDB berjalan
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Buat database WordPress
+      community.mysql.mysql_db:
+        name: wordpress
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
+
+    - name: Buat user database WordPress
+      community.mysql.mysql_user:
+        name: wpuser
+        host: 192.168.56.10
+        password: "12345678"
+        priv: "wordpress.*:ALL"
+        state: present
+        login_unix_socket: /run/mysqld/mysqld.sock
